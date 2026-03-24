@@ -1,0 +1,181 @@
+module apb_bridge (
+    input  wire        PCLK,
+    input  wire        PRESETn,
+
+    // simple request side
+    input  wire        req,
+    input  wire [31:0] addr,
+    input  wire        write,
+    input  wire [31:0] wdata,
+
+    output reg         ready, // state = IDLE
+							  // ready = 1; 
+  							  // ready for new transaction
+    output reg         done,  // old transaction is done 
+    output reg  [31:0] rdata,
+
+    // APB side
+    output reg  [31:0] PADDR,
+    output reg         PSEL,
+    output reg         PENABLE,
+    output reg         PWRITE,
+    output reg  [31:0] PWDATA,
+    input  wire [31:0] PRDATA
+);
+
+    parameter IDLE   = 2'b00;
+    parameter SETUP  = 2'b01;
+    parameter ENABLE = 2'b10;
+
+    reg [1:0] state, next_state;
+
+    reg [31:0] addr_reg;
+    reg        write_reg;
+    reg [31:0] wdata_reg;
+// PADDR <= addr_reg
+// PWRITE <= write_reg
+// PWDATA <= wdata_reg
+    always @(posedge PCLK or negedge PRESETn) begin
+        if (!PRESETn) begin
+            state     <= IDLE;
+            addr_reg  <= 32'b0;
+            write_reg <= 1'b0;
+            wdata_reg <= 32'b0;
+
+            ready     <= 1'b1;
+            done      <= 1'b0;
+            rdata     <= 32'b0;
+
+            PADDR     <= 32'b0;
+            PSEL      <= 1'b0;
+            PENABLE   <= 1'b0;
+            PWRITE    <= 1'b0;
+            PWDATA    <= 32'b0;
+        end
+        else begin
+            state <= next_state;
+
+            case (state)
+                IDLE: begin
+                    ready   <= 1'b1;
+                    done    <= 1'b0;
+                    PSEL    <= 1'b0;
+                    PENABLE <= 1'b0;
+
+                    if (req) begin
+                        addr_reg  <= addr;
+                        write_reg <= write;
+                        wdata_reg <= wdata;
+                        ready     <= 1'b0;
+                    end
+                end
+
+                SETUP: begin
+                    ready   <= 1'b0;
+                    done    <= 1'b0;
+                    PADDR   <= addr_reg;
+                    PWRITE  <= write_reg;
+                    PWDATA  <= wdata_reg;
+                    PSEL    <= 1'b1;
+                    PENABLE <= 1'b0;
+                end
+
+                ENABLE: begin
+                    ready   <= 1'b0;
+                    done    <= 1'b1;
+                    PADDR   <= addr_reg;
+                    PWRITE  <= write_reg;
+                    PWDATA  <= wdata_reg;
+                    PSEL    <= 1'b1;
+                    PENABLE <= 1'b1;
+
+                    if (!write_reg)
+                        rdata <= PRDATA;
+                end
+
+                default: begin
+                    ready   <= 1'b1;
+                    done    <= 1'b0;
+                    rdata   <= 32'b0;
+                    PADDR   <= 32'b0;
+                    PSEL    <= 1'b0;
+                    PENABLE <= 1'b0;
+                    PWRITE  <= 1'b0;
+                    PWDATA  <= 32'b0;
+                end
+            endcase
+        end
+    end
+
+    // state machine run through
+    always @(*) begin
+        next_state = state;
+
+        case (state)
+            IDLE: begin
+                if (req)
+                    next_state = SETUP;
+                else
+                    next_state = IDLE;
+            end
+
+            SETUP: begin
+                next_state = ENABLE;
+            end
+
+            ENABLE: begin
+                next_state = IDLE;
+            end
+
+            default: begin
+                next_state = IDLE;
+            end
+        endcase
+    end
+
+endmodule
+// APB Slave
+module apb_slave (
+    input  wire        PCLK,
+    input  wire        PRESETn,
+    input  wire [31:0] PADDR,
+    input  wire        PSEL,
+    input  wire        PENABLE,
+    input  wire        PWRITE,
+    input  wire [31:0] PWDATA,
+    output reg  [31:0] PRDATA
+);
+
+  reg [31:0] reg0; //slave register 0
+  reg [31:0] reg1; //Slave register 1
+
+    always @(posedge PCLK or negedge PRESETn) begin
+        if (!PRESETn) begin
+            reg0 <= 32'b0;
+            reg1 <= 32'b0;
+        end
+        else begin
+            if (PSEL && PENABLE && PWRITE) begin
+                case (PADDR[3:2])
+                    2'b00: reg0 <= PWDATA;
+                    2'b01: reg1 <= PWDATA;
+                    default: ;
+                endcase
+            end
+        end
+    end
+
+    always @(*) begin
+        PRDATA = 32'b0;
+
+        if (PSEL && PENABLE && !PWRITE) begin
+            case (PADDR[3:2])
+                2'b00: PRDATA = reg0;
+                2'b01: PRDATA = reg1;
+                default: PRDATA = 32'b0;
+            endcase
+        end
+    end
+
+endmodule
+
